@@ -1,5 +1,6 @@
 import json
 import random
+import re
 import pickle
 from pathlib import Path
 
@@ -16,8 +17,7 @@ from tensorflow.keras import layers, models, callbacks
 # PATHS
 # =========================
 BASE_DIR = Path(__file__).resolve().parent
-DATASET_DIR = BASE_DIR / "spell_dataset"
-MANIFEST_PATH = DATASET_DIR / "labels.jsonl"
+WAV_DIR = BASE_DIR / "spell_dataset" / "wav"
 
 MODEL_OUT = BASE_DIR / "spell_cnn_lstm.keras"
 LABELS_OUT = BASE_DIR / "spell_labels.pkl"
@@ -28,14 +28,19 @@ CONFIG_OUT = BASE_DIR / "spell_model_config.json"
 # =========================
 SAMPLE_RATE = 16000
 CLIP_SECONDS = 2.0
-N_MFCC = 13
+N_MFCC = 40
 N_FFT = 512
 HOP_LENGTH = 160
 
 TEST_SIZE = 0.2
 RANDOM_SEED = 42
-BATCH_SIZE = 16
-EPOCHS = 100
+BATCH_SIZE = 10
+EPOCHS = 1000
+
+# Match filenames like:
+# lumos_20260410_110552_434309.wav
+# wingardium leviosa_20260410_110558_169478.wav
+FILENAME_PATTERN = re.compile(r"^(?P<label>.+)_\d{8}_\d{6}_\d+\.wav$", re.IGNORECASE)
 
 # =========================
 # REPRODUCIBILITY
@@ -48,39 +53,18 @@ tf.random.set_seed(RANDOM_SEED)
 # HELPERS
 # =========================
 def normalize_label(label: str) -> str:
-    """Normalize labels so capitalization/spacing mistakes do not split classes."""
     return str(label).strip().lower()
 
-def resolve_data_path(path_str: str) -> Path:
+def extract_label_from_filename(filename: str) -> str | None:
     """
-    Resolve a path from the JSON file safely.
-    If the JSON already contains an absolute path, use it.
-    Otherwise treat it as relative to BASE_DIR.
+    Extract label from filenames like:
+    lumos_20260410_110552_434309.wav
+    wingardium leviosa_20260410_110558_169478.wav
     """
-    p = Path(path_str)
-    if p.is_absolute():
-        return p
-    return BASE_DIR / p
-
-def load_manifest(path: Path):
-    if not path.exists():
-        raise FileNotFoundError(f"Manifest file not found: {path}")
-
-    rows = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line_num, line in enumerate(f, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError as e:
-                raise ValueError(f"Invalid JSON on line {line_num} of {path}: {e}")
-
-    if not rows:
-        raise ValueError(f"Manifest file is empty: {path}")
-
-    return rows
+    match = FILENAME_PATTERN.match(filename)
+    if not match:
+        return None
+    return normalize_label(match.group("label"))
 
 def load_audio_fixed_length(wav_path: str, sr: int, clip_seconds: float) -> np.ndarray:
     """
@@ -112,34 +96,30 @@ def extract_mfcc(audio: np.ndarray, sr: int) -> np.ndarray:
         hop_length=HOP_LENGTH
     )
 
-    # Normalize per sample for stability
     mfcc = (mfcc - np.mean(mfcc)) / (np.std(mfcc) + 1e-8)
+    return mfcc.T.astype(np.float32)  # (time, n_mfcc)
 
-    # librosa returns (n_mfcc, time), convert to (time, n_mfcc)
-    return mfcc.T.astype(np.float32)
+def find_wav_files(wav_dir: Path):
+    if not wav_dir.exists():
+        raise FileNotFoundError(f"WAV folder not found: {wav_dir}")
 
-def build_dataset(manifest_rows):
+    wav_files = sorted(wav_dir.glob("*.wav"))
+    if not wav_files:
+        raise RuntimeError(f"No .wav files found in: {wav_dir}")
+
+    return wav_files
+
+def build_dataset_from_wavs(wav_files):
     X = []
     y = []
     bad_files = []
-    skipped_rows = 0
+    skipped_files = []
 
-    for idx, row in enumerate(manifest_rows, start=1):
-        if "label" not in row:
-            print(f"Skipping row {idx}: missing 'label'")
-            skipped_rows += 1
-            continue
+    for wav_path in wav_files:
+        label = extract_label_from_filename(wav_path.name)
 
-        if "wav_path" not in row:
-            print(f"Skipping row {idx}: missing 'wav_path'")
-            skipped_rows += 1
-            continue
-
-        label = normalize_label(row["label"])
-        wav_path = resolve_data_path(row["wav_path"])
-
-        if not wav_path.exists():
-            bad_files.append(str(wav_path))
+        if label is None:
+            skipped_files.append(str(wav_path))
             continue
 
         try:
@@ -154,12 +134,12 @@ def build_dataset(manifest_rows):
             bad_files.append(str(wav_path))
 
     if len(X) == 0:
-        raise RuntimeError("No usable audio files found after processing manifest.")
+        raise RuntimeError("No usable audio files found after scanning wav folder.")
 
     X = np.array(X, dtype=np.float32)
     y = np.array(y)
 
-    return X, y, bad_files, skipped_rows
+    return X, y, bad_files, skipped_files
 
 def build_model(time_steps: int, n_mfcc: int, num_classes: int):
     model = models.Sequential([
@@ -209,17 +189,21 @@ def save_config(time_steps: int, classes):
         json.dump(config, f, indent=2)
 
 def main():
-    print(f"Using manifest: {MANIFEST_PATH}")
-    rows = load_manifest(MANIFEST_PATH)
-    print(f"Loaded {len(rows)} entries from manifest")
+    print(f"Using wav folder: {WAV_DIR}")
+    wav_files = find_wav_files(WAV_DIR)
+    print(f"Found {len(wav_files)} wav files")
 
-    X, y_text, bad_files, skipped_rows = build_dataset(rows)
+    X, y_text, bad_files, skipped_files = build_dataset_from_wavs(wav_files)
 
-    if skipped_rows > 0:
-        print(f"\nSkipped {skipped_rows} malformed rows")
+    if skipped_files:
+        print(f"\nSkipped {len(skipped_files)} files with unexpected names")
+        for sf in skipped_files[:10]:
+            print("  ", sf)
+        if len(skipped_files) > 10:
+            print("  ...")
 
-    if len(bad_files) > 0:
-        print(f"\nSkipped {len(bad_files)} missing/bad files")
+    if bad_files:
+        print(f"\nSkipped {len(bad_files)} unreadable/bad files")
         for bf in bad_files[:10]:
             print("  ", bf)
         if len(bad_files) > 10:
@@ -241,7 +225,6 @@ def main():
     if num_classes < 2:
         raise RuntimeError("Need at least 2 classes to train a classifier.")
 
-    # Make sure every class has at least 2 samples if using stratify
     class_counts = np.bincount(y)
     use_stratify = np.all(class_counts >= 2)
 
