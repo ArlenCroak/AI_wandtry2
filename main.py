@@ -1,6 +1,5 @@
 import os
 import json
-import queue
 from datetime import datetime
 import tkinter as tk
 
@@ -8,23 +7,22 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 import librosa
+import matplotlib.pyplot as plt
 
 
 # ---------------- SETTINGS ----------------
 SAMPLE_RATE = 16000
-RECORD_SECONDS = 2.5
 N_MFCC = 13
 
-# Change these to your actual spell names
 SPELLS = {
     "1": "lumos",
-    "2": "expelliarmus",
-    "3": "alohomora"
+    "2": "wingardium leviosa",
+    "3": "Aguamenti"
 }
 
 DATASET_DIR = "spell_dataset"
 WAV_DIR = os.path.join(DATASET_DIR, "wav")
-MFCC_DIR = os.path.join(DATASET_DIR, "mfcc")
+IMG_DIR = os.path.join(DATASET_DIR, "images")
 LABELS_FILE = os.path.join(DATASET_DIR, "labels.jsonl")
 # -----------------------------------------
 
@@ -33,16 +31,19 @@ class SpellRecorderApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Harry Potter Spell Recorder")
-        self.root.geometry("650x420")
+        self.root.geometry("720x520")
         self.root.resizable(False, False)
 
         os.makedirs(WAV_DIR, exist_ok=True)
-        os.makedirs(MFCC_DIR, exist_ok=True)
+        os.makedirs(IMG_DIR, exist_ok=True)
 
         self.is_recording = False
-        self.message_queue = queue.Queue()
+        self.current_label = None
+        self.current_key = None
+        self.stream = None
+        self.audio_buffer = []
 
-        self.status_var = tk.StringVar(value="Ready. Press 1, 2, or 3 to record a spell.")
+        self.status_var = tk.StringVar(value="Ready. Press 1, 2, or 3 to start recording.")
         self.count_var = tk.StringVar(value=self.get_counts_text())
 
         title = tk.Label(
@@ -55,10 +56,11 @@ class SpellRecorderApp:
         instructions = tk.Label(
             root,
             text=(
-                "Press one of these keys to record:\n"
+                "Press one of these keys:\n"
                 f"1 = {SPELLS['1']}\n"
                 f"2 = {SPELLS['2']}\n"
                 f"3 = {SPELLS['3']}\n\n"
+                "Press the same key again to stop recording.\n"
                 "Press ESC to quit."
             ),
             font=("Arial", 12),
@@ -66,32 +68,30 @@ class SpellRecorderApp:
         )
         instructions.pack(pady=10)
 
-        self.status_label = tk.Label(
+        status_label = tk.Label(
             root,
             textvariable=self.status_var,
             font=("Arial", 12),
-            wraplength=600,
+            wraplength=680,
             justify="left"
         )
-        self.status_label.pack(pady=10)
+        status_label.pack(pady=10)
 
-        self.count_label = tk.Label(
+        count_label = tk.Label(
             root,
             textvariable=self.count_var,
             font=("Arial", 11),
             justify="left"
         )
-        self.count_label.pack(pady=5)
+        count_label.pack(pady=5)
 
-        self.log_box = tk.Text(root, height=10, width=75, state="disabled")
+        self.log_box = tk.Text(root, height=15, width=82, state="disabled")
         self.log_box.pack(pady=10)
 
-        root.bind("<KeyPress-1>", lambda event: self.start_recording("1"))
-        root.bind("<KeyPress-2>", lambda event: self.start_recording("2"))
-        root.bind("<KeyPress-3>", lambda event: self.start_recording("3"))
-        root.bind("<Escape>", lambda event: root.destroy())
-
-        self.root.after(100, self.process_queue)
+        root.bind("<KeyPress-1>", lambda event: self.handle_key("1"))
+        root.bind("<KeyPress-2>", lambda event: self.handle_key("2"))
+        root.bind("<KeyPress-3>", lambda event: self.handle_key("3"))
+        root.bind("<Escape>", lambda event: self.on_close())
 
     def log(self, text: str):
         self.log_box.config(state="normal")
@@ -113,101 +113,148 @@ class SpellRecorderApp:
                     except Exception:
                         pass
 
-        return (
-            "Saved samples:\n"
-            + "\n".join([f"{label}: {count}" for label, count in counts.items()])
+        return "Saved samples:\n" + "\n".join(
+            [f"{label}: {count}" for label, count in counts.items()]
         )
 
-    def start_recording(self, key):
-        if self.is_recording:
-            self.status_var.set("Already recording. Wait until it finishes.")
-            return
-
+    def handle_key(self, key):
         if key not in SPELLS:
             return
 
-        self.is_recording = True
         label = SPELLS[key]
-        self.status_var.set(f"Recording spell: {label} ... Speak now!")
-        self.log(f"[{datetime.now().strftime('%H:%M:%S')}] Started recording: {label}")
 
-        self.root.after(100, lambda: self.record_and_save(label))
+        if not self.is_recording:
+            self.start_recording(key, label)
+        else:
+            if key == self.current_key:
+                self.stop_recording()
+            else:
+                self.status_var.set(
+                    f"Currently recording {self.current_label}. Press {self.current_key} again to stop first."
+                )
 
-    def record_and_save(self, label):
+    def start_recording(self, key, label):
         try:
-            num_samples = int(SAMPLE_RATE * RECORD_SECONDS)
+            self.audio_buffer = []
+            self.current_label = label
+            self.current_key = key
+            self.is_recording = True
 
-            audio = sd.rec(
-                frames=num_samples,
+            self.stream = sd.InputStream(
                 samplerate=SAMPLE_RATE,
                 channels=1,
-                dtype="float32"
+                dtype="float32",
+                callback=self.audio_callback
             )
-            sd.wait()
+            self.stream.start()
 
-            audio = audio.flatten()
+            self.status_var.set(f"Recording {label}... Press {key} again to stop.")
+            self.log(f"[{datetime.now().strftime('%H:%M:%S')}] START recording: {label}")
 
-            # normalize if not silent
+        except Exception as e:
+            self.status_var.set(f"Error starting recording: {e}")
+            self.log(f"ERROR starting recording: {e}")
+            self.is_recording = False
+            self.current_label = None
+            self.current_key = None
+            self.audio_buffer = []
+
+    def audio_callback(self, indata, frames, time, status):
+        if status:
+            print(status)
+        self.audio_buffer.append(indata.copy())
+
+    def stop_recording(self):
+        try:
+            if self.stream is not None:
+                self.stream.stop()
+                self.stream.close()
+                self.stream = None
+
+            if not self.audio_buffer:
+                self.status_var.set("No audio recorded.")
+                self.log("WARNING: No audio captured.")
+                return
+
+            audio = np.concatenate(self.audio_buffer, axis=0).flatten()
+
             max_val = np.max(np.abs(audio))
             if max_val > 0:
                 audio = audio / max_val
 
+            label = self.current_label
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             base_name = f"{label}_{timestamp}"
 
             wav_path = os.path.join(WAV_DIR, base_name + ".wav")
-            mfcc_path = os.path.join(MFCC_DIR, base_name + ".npy")
+            img_path = os.path.join(IMG_DIR, base_name + ".png")
 
             # Save raw audio
             sf.write(wav_path, audio, SAMPLE_RATE)
 
-            # Extract MFCCs
+            # Extract MFCC
             mfcc = librosa.feature.mfcc(
                 y=audio,
                 sr=SAMPLE_RATE,
                 n_mfcc=N_MFCC
             )
 
-            # Optional: use a fixed-size feature vector for easier training later
-            # Here we store mean and std over time
-            mfcc_mean = np.mean(mfcc, axis=1)
-            mfcc_std = np.std(mfcc, axis=1)
-            feature_vector = np.concatenate([mfcc_mean, mfcc_std])
+            # Better contrast for image saving
+            mfcc_db = librosa.power_to_db(np.abs(mfcc), ref=np.max)
 
-            np.save(mfcc_path, feature_vector)
+            # Save MFCC image
+            plt.figure(figsize=(4, 4))
+
+            librosa.display.specshow(
+                mfcc_db,
+                sr=SAMPLE_RATE,
+                x_axis='time'
+            )
+            plt.axis("off")
+            plt.tight_layout(pad=0)
+            plt.savefig(img_path, bbox_inches="tight", pad_inches=0)
+            plt.close()
 
             metadata = {
                 "label": label,
                 "wav_path": wav_path,
-                "mfcc_path": mfcc_path,
+                "image_path": img_path,
                 "timestamp": timestamp,
                 "sample_rate": SAMPLE_RATE,
-                "record_seconds": RECORD_SECONDS,
                 "n_mfcc": N_MFCC
             }
 
             with open(LABELS_FILE, "a", encoding="utf-8") as f:
                 f.write(json.dumps(metadata) + "\n")
 
-            self.status_var.set(f"Saved recording for: {label}")
+            self.status_var.set(f"Saved recording for {label}")
             self.count_var.set(self.get_counts_text())
-            self.log(f"[{datetime.now().strftime('%H:%M:%S')}] Saved: {label}")
+            self.log(f"[{datetime.now().strftime('%H:%M:%S')}] STOP recording: {label}")
+            self.log(f"Saved WAV: {wav_path}")
+            self.log(f"Saved image: {img_path}")
 
         except Exception as e:
-            self.status_var.set(f"Error: {e}")
-            self.log(f"ERROR: {e}")
+            self.status_var.set(f"Error stopping recording: {e}")
+            self.log(f"ERROR stopping recording: {e}")
 
         finally:
             self.is_recording = False
+            self.current_label = None
+            self.current_key = None
+            self.audio_buffer = []
 
-    def process_queue(self):
-        while not self.message_queue.empty():
-            msg = self.message_queue.get()
-            self.log(msg)
-        self.root.after(100, self.process_queue)
+    def on_close(self):
+        try:
+            if self.stream is not None:
+                self.stream.stop()
+                self.stream.close()
+        except Exception:
+            pass
+        self.root.destroy()
 
 
 if __name__ == "__main__":
     root = tk.Tk()
     app = SpellRecorderApp(root)
+    root.protocol("WM_DELETE_WINDOW", app.on_close)
     root.mainloop()
