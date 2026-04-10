@@ -1,0 +1,13 @@
+{
+  "sample_rate": 16000,
+  "clip_seconds": 2.0,
+  "n_mfcc": 40,
+  "n_fft": 512,
+  "hop_length": 160,
+  "time_steps": 201,
+  "classes": [
+    "aguamenti",
+    "lumos",
+    "wingardium leviosa"
+  ]
+}
