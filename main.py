@@ -16,8 +16,9 @@ N_MFCC = 13
 
 SPELLS = {
     "1": "lumos",
-    "2": "wingardium leviosa",
-    "3": "Aguamenti"
+    "2": "expelliarmus",
+    "3": "alohomora",
+    "0": "nothing"
 }
 
 DATASET_DIR = "spell_dataset"
@@ -31,7 +32,7 @@ class SpellRecorderApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Harry Potter Spell Recorder")
-        self.root.geometry("720x520")
+        self.root.geometry("720x540")
         self.root.resizable(False, False)
 
         os.makedirs(WAV_DIR, exist_ok=True)
@@ -43,7 +44,7 @@ class SpellRecorderApp:
         self.stream = None
         self.audio_buffer = []
 
-        self.status_var = tk.StringVar(value="Ready. Press 1, 2, or 3 to start recording.")
+        self.status_var = tk.StringVar(value="Ready. Press 0, 1, 2, or 3 to start recording.")
         self.count_var = tk.StringVar(value=self.get_counts_text())
 
         title = tk.Label(
@@ -59,7 +60,8 @@ class SpellRecorderApp:
                 "Press one of these keys:\n"
                 f"1 = {SPELLS['1']}\n"
                 f"2 = {SPELLS['2']}\n"
-                f"3 = {SPELLS['3']}\n\n"
+                f"3 = {SPELLS['3']}\n"
+                f"0 = {SPELLS['0']} (background / no spell)\n\n"
                 "Press the same key again to stop recording.\n"
                 "Press ESC to quit."
             ),
@@ -85,9 +87,10 @@ class SpellRecorderApp:
         )
         count_label.pack(pady=5)
 
-        self.log_box = tk.Text(root, height=15, width=82, state="disabled")
+        self.log_box = tk.Text(root, height=16, width=82, state="disabled")
         self.log_box.pack(pady=10)
 
+        root.bind("<KeyPress-0>", lambda event: self.handle_key("0"))
         root.bind("<KeyPress-1>", lambda event: self.handle_key("1"))
         root.bind("<KeyPress-2>", lambda event: self.handle_key("2"))
         root.bind("<KeyPress-3>", lambda event: self.handle_key("3"))
@@ -199,17 +202,12 @@ class SpellRecorderApp:
                 n_mfcc=N_MFCC
             )
 
-            # Better contrast for image saving
-            mfcc_db = librosa.power_to_db(np.abs(mfcc), ref=np.max)
+            # Convert for better image contrast
+            mfcc_db = librosa.power_to_db(np.abs(mfcc) + 1e-6, ref=np.max)
 
             # Save MFCC image
             plt.figure(figsize=(4, 4))
-
-            librosa.display.specshow(
-                mfcc_db,
-                sr=SAMPLE_RATE,
-                x_axis='time'
-            )
+            plt.imshow(mfcc_db, aspect="auto", origin="lower")
             plt.axis("off")
             plt.tight_layout(pad=0)
             plt.savefig(img_path, bbox_inches="tight", pad_inches=0)
