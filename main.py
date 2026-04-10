@@ -1,30 +1,28 @@
 import os
-import json
 from datetime import datetime
 import tkinter as tk
 
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
-import librosa
-import matplotlib.pyplot as plt
 
 
 # ---------------- SETTINGS ----------------
 SAMPLE_RATE = 16000
-N_MFCC = 13
 
 SPELLS = {
     "1": "lumos",
-    "2": "expelliarmus",
-    "3": "alohomora",
+    "2": "wingardium leviosa",
+    "3": "aguamenti",
     "0": "nothing"
 }
 
 DATASET_DIR = "spell_dataset"
 WAV_DIR = os.path.join(DATASET_DIR, "wav")
-IMG_DIR = os.path.join(DATASET_DIR, "images")
-LABELS_FILE = os.path.join(DATASET_DIR, "labels.jsonl")
+
+# Set this to your USB mic index if you want to force a specific mic.
+# Leave as None to use the system default input device.
+INPUT_DEVICE = None
 # -----------------------------------------
 
 
@@ -32,11 +30,10 @@ class SpellRecorderApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Harry Potter Spell Recorder")
-        self.root.geometry("720x540")
+        self.root.geometry("900x700")
         self.root.resizable(False, False)
 
         os.makedirs(WAV_DIR, exist_ok=True)
-        os.makedirs(IMG_DIR, exist_ok=True)
 
         self.is_recording = False
         self.current_label = None
@@ -46,13 +43,25 @@ class SpellRecorderApp:
 
         self.status_var = tk.StringVar(value="Ready. Press 0, 1, 2, or 3 to start recording.")
         self.count_var = tk.StringVar(value=self.get_counts_text())
+        self.big_label_var = tk.StringVar(value="READY")
 
         title = tk.Label(
             root,
             text="Spell Data Recorder",
-            font=("Arial", 18, "bold")
+            font=("Arial", 20, "bold")
         )
         title.pack(pady=10)
+
+        big_label = tk.Label(
+            root,
+            textvariable=self.big_label_var,
+            font=("Arial", 42, "bold"),
+            fg="white",
+            bg="black",
+            width=20,
+            height=2
+        )
+        big_label.pack(pady=20)
 
         instructions = tk.Label(
             root,
@@ -74,7 +83,7 @@ class SpellRecorderApp:
             root,
             textvariable=self.status_var,
             font=("Arial", 12),
-            wraplength=680,
+            wraplength=850,
             justify="left"
         )
         status_label.pack(pady=10)
@@ -87,7 +96,7 @@ class SpellRecorderApp:
         )
         count_label.pack(pady=5)
 
-        self.log_box = tk.Text(root, height=16, width=82, state="disabled")
+        self.log_box = tk.Text(root, height=16, width=100, state="disabled")
         self.log_box.pack(pady=10)
 
         root.bind("<KeyPress-0>", lambda event: self.handle_key("0"))
@@ -105,16 +114,14 @@ class SpellRecorderApp:
     def get_counts_text(self):
         counts = {spell: 0 for spell in SPELLS.values()}
 
-        if os.path.exists(LABELS_FILE):
-            with open(LABELS_FILE, "r", encoding="utf-8") as f:
-                for line in f:
-                    try:
-                        item = json.loads(line)
-                        label = item["label"]
-                        if label in counts:
-                            counts[label] += 1
-                    except Exception:
-                        pass
+        if os.path.exists(WAV_DIR):
+            for filename in os.listdir(WAV_DIR):
+                if not filename.lower().endswith(".wav"):
+                    continue
+                for label in counts:
+                    if filename.startswith(label + "_"):
+                        counts[label] += 1
+                        break
 
         return "Saved samples:\n" + "\n".join(
             [f"{label}: {count}" for label, count in counts.items()]
@@ -135,6 +142,7 @@ class SpellRecorderApp:
                 self.status_var.set(
                     f"Currently recording {self.current_label}. Press {self.current_key} again to stop first."
                 )
+                self.big_label_var.set(self.current_label.upper())
 
     def start_recording(self, key, label):
         try:
@@ -146,16 +154,19 @@ class SpellRecorderApp:
             self.stream = sd.InputStream(
                 samplerate=SAMPLE_RATE,
                 channels=1,
+                device=INPUT_DEVICE,
                 dtype="float32",
                 callback=self.audio_callback
             )
             self.stream.start()
 
             self.status_var.set(f"Recording {label}... Press {key} again to stop.")
+            self.big_label_var.set(label.upper())
             self.log(f"[{datetime.now().strftime('%H:%M:%S')}] START recording: {label}")
 
         except Exception as e:
             self.status_var.set(f"Error starting recording: {e}")
+            self.big_label_var.set("ERROR")
             self.log(f"ERROR starting recording: {e}")
             self.is_recording = False
             self.current_label = None
@@ -176,6 +187,7 @@ class SpellRecorderApp:
 
             if not self.audio_buffer:
                 self.status_var.set("No audio recorded.")
+                self.big_label_var.set("READY")
                 self.log("WARNING: No audio captured.")
                 return
 
@@ -187,52 +199,20 @@ class SpellRecorderApp:
 
             label = self.current_label
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            base_name = f"{label}_{timestamp}"
+            filename = f"{label}_{timestamp}.wav"
+            wav_path = os.path.join(WAV_DIR, filename)
 
-            wav_path = os.path.join(WAV_DIR, base_name + ".wav")
-            img_path = os.path.join(IMG_DIR, base_name + ".png")
-
-            # Save raw audio
             sf.write(wav_path, audio, SAMPLE_RATE)
-
-            # Extract MFCC
-            mfcc = librosa.feature.mfcc(
-                y=audio,
-                sr=SAMPLE_RATE,
-                n_mfcc=N_MFCC
-            )
-
-            # Convert for better image contrast
-            mfcc_db = librosa.power_to_db(np.abs(mfcc) + 1e-6, ref=np.max)
-
-            # Save MFCC image
-            plt.figure(figsize=(4, 4))
-            plt.imshow(mfcc_db, aspect="auto", origin="lower")
-            plt.axis("off")
-            plt.tight_layout(pad=0)
-            plt.savefig(img_path, bbox_inches="tight", pad_inches=0)
-            plt.close()
-
-            metadata = {
-                "label": label,
-                "wav_path": wav_path,
-                "image_path": img_path,
-                "timestamp": timestamp,
-                "sample_rate": SAMPLE_RATE,
-                "n_mfcc": N_MFCC
-            }
-
-            with open(LABELS_FILE, "a", encoding="utf-8") as f:
-                f.write(json.dumps(metadata) + "\n")
 
             self.status_var.set(f"Saved recording for {label}")
             self.count_var.set(self.get_counts_text())
+            self.big_label_var.set("READY")
             self.log(f"[{datetime.now().strftime('%H:%M:%S')}] STOP recording: {label}")
             self.log(f"Saved WAV: {wav_path}")
-            self.log(f"Saved image: {img_path}")
 
         except Exception as e:
             self.status_var.set(f"Error stopping recording: {e}")
+            self.big_label_var.set("ERROR")
             self.log(f"ERROR stopping recording: {e}")
 
         finally:
