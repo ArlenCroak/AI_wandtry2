@@ -22,7 +22,7 @@ CONFIG_PATH = BASE_DIR / "spell_model_config.json"
 # DETECTION SETTINGS
 # =========================
 CONFIDENCE_THRESHOLD = 0.85  # model must be at least this confident to announce a spell
-COOLDOWN_SECONDS     = 3.0   # after detecting a spell, ignore detections for this long
+COOLDOWN_SECONDS     = 2.0   # after detecting a spell, ignore detections for this long
 STEP_SECONDS         = 0.3   # how often we run the model on the buffer
 
 # =========================
