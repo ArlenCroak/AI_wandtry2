@@ -1,10 +1,10 @@
 {
   "sample_rate": 16000,
-  "clip_seconds": 2.0,
+  "clip_seconds": 5.0,
   "n_mfcc": 40,
   "n_fft": 512,
   "hop_length": 160,
-  "time_steps": 201,
+  "time_steps": 501,
   "classes": [
     "aguamenti",
     "lumos",
