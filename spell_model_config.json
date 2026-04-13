@@ -5,6 +5,7 @@
   "n_fft": 512,
   "hop_length": 160,
   "time_steps": 501,
+  "n_features": 120,
   "classes": [
     "aguamenti",
     "lumos",
