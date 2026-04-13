@@ -16,31 +16,30 @@ from tensorflow.keras import layers, models, callbacks
 # =========================
 # PATHS
 # =========================
-BASE_DIR = Path(__file__).resolve().parent
-WAV_DIR = BASE_DIR / "spell_dataset" / "wav"
-
-MODEL_OUT = BASE_DIR / "spell_cnn_lstm.keras"
-LABELS_OUT = BASE_DIR / "spell_labels.pkl"
-CONFIG_OUT = BASE_DIR / "spell_model_config.json"
+BASE_DIR = Path(__file__).resolve().parent #folder were our script is
+WAV_DIR = BASE_DIR / "spell_dataset" / "wav" #audio files
+MODEL_OUT = BASE_DIR / "spell_cnn_lstm.keras" #trained model save
+LABELS_OUT = BASE_DIR / "spell_labels.pkl" # stores the label names
+CONFIG_OUT = BASE_DIR / "spell_model_config.json" #configuration setting
 
 # =========================
 # SETTINGS
 # =========================
 SAMPLE_RATE = 16000
-CLIP_SECONDS = 2.0
-N_MFCC = 40
-N_FFT = 512
-HOP_LENGTH = 160
+CLIP_SECONDS = 5.0 #cut to exactly 5 seconds long
+N_MFCC = 40 #Mel Frequency Cepstral Coefficients
+N_FFT = 512 #Fast Fourier Transform chunk
+HOP_LENGTH = 160 #How many samples to move forward between each FFT chunk
 
 TEST_SIZE = 0.2
-RANDOM_SEED = 42
+RANDOM_SEED = 42 #radom_split
 BATCH_SIZE = 10
 EPOCHS = 1000
 
 # Match filenames like:
 # lumos_20260410_110552_434309.wav
 # wingardium leviosa_20260410_110558_169478.wav
-FILENAME_PATTERN = re.compile(r"^(?P<label>.+)_\d{8}_\d{6}_\d+\.wav$", re.IGNORECASE)
+FILENAME_PATTERN = re.compile(r"^(?P<label>.+)_\d{8}_\d{6}_\d+\.wav$", re.IGNORECASE) #regex pattern that matches audio filenames
 
 # =========================
 # REPRODUCIBILITY
@@ -96,7 +95,7 @@ def extract_mfcc(audio: np.ndarray, sr: int) -> np.ndarray:
         hop_length=HOP_LENGTH
     )
 
-    mfcc = (mfcc - np.mean(mfcc)) / (np.std(mfcc) + 1e-8)
+    mfcc = (mfcc - np.mean(mfcc)) / (np.std(mfcc) + 1e-8) #1e-8 prevents dividing by 0
     return mfcc.T.astype(np.float32)  # (time, n_mfcc)
 
 def find_wav_files(wav_dir: Path):
