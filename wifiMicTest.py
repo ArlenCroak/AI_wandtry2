@@ -8,7 +8,7 @@ import numpy as np
 
 ESP_IP = "192.168.4.1"
 UDP_PORT = 12345
-SAMPLE_RATE = 48000   # set this to match your USB config exactly
+SAMPLE_RATE = 16000
 CHANNELS = 1
 SAMPLE_WIDTH_BYTES = 2  # int16
 
